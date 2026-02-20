@@ -139,6 +139,16 @@
     #send-btn:disabled{background:var(--border);opacity:.6;cursor:not-allowed;}
     #hint{text-align:center;font-size:11px;color:var(--muted);margin-top:7px;}
 
+    /* VOICE */
+    #mic-btn{width:38px;height:38px;border-radius:50%;background:var(--surf2);border:1.5px solid var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s;color:var(--muted);}
+    #mic-btn:active{transform:scale(.88);}
+    #mic-btn.listening{background:rgba(234,67,53,.15);border-color:#ea4335;color:#ea4335;animation:pulse-mic 1s infinite;}
+    @keyframes pulse-mic{0%,100%{box-shadow:0 0 0 0 rgba(234,67,53,.4);}50%{box-shadow:0 0 0 8px rgba(234,67,53,0);}}
+    #voice-status{text-align:center;font-size:12px;color:#ea4335;margin-top:4px;height:14px;font-weight:500;}
+    .speak-btn{display:inline-flex;align-items:center;gap:5px;margin-top:8px;padding:5px 12px;background:var(--surf2);border:1px solid var(--border);border-radius:999px;color:var(--muted);font-size:12px;cursor:pointer;font-family:inherit;}
+    .speak-btn.speaking{color:var(--accent);border-color:rgba(66,133,244,.4);background:rgba(66,133,244,.08);animation:spk 1s infinite alternate;}
+    @keyframes spk{from{opacity:1;}to{opacity:.5;}}
+
     /* MODAL (bottom sheet) */
     #modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:80;align-items:flex-end;justify-content:center;}
     #modal-bg.on{display:flex;}
@@ -262,14 +272,21 @@
 
     <div id="input-bar">
       <div id="input-row">
-        <textarea id="user-input" rows="1" placeholder="Message GGBot Boy…" autocomplete="off" autocorrect="on" spellcheck="true"></textarea>
+        <button id="mic-btn" title="Voice Input">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24">
+            <rect x="9" y="2" width="6" height="11" rx="3"/>
+            <path d="M5 10a7 7 0 0 0 14 0M12 19v3M9 22h6"/>
+          </svg>
+        </button>
+        <textarea id="user-input" rows="1" placeholder="Message or tap mic…" autocomplete="off" autocorrect="on" spellcheck="true"></textarea>
         <button id="send-btn" disabled>
           <svg width="18" height="18" fill="none" stroke="white" stroke-width="2.5" viewBox="0 0 24 24">
             <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
           </svg>
         </button>
       </div>
-      <div id="hint">GGBot Boy · arcee-ai/trinity-large</div>
+      <div id="voice-status"></div>
+      <div id="hint">GGBot Boy · 🎤 Tap mic to speak</div>
     </div>
   </div>
 </div>
@@ -791,15 +808,31 @@
     saveC();
     busy = false;
     document.getElementById('send-btn').disabled = !document.getElementById('user-input').value.trim();
+    // Add speak button to the finished bubble
+    if (bubble) addSpeakBtn(bubble);
     scrollBot();
   }
 
   function mkBubble() {
     var d = document.createElement('div');
     d.className = 'msg-ai';
-    d.innerHTML = '<div class="av">G</div><div class="bbl"></div>';
+    var uid = 'sp_' + Math.random().toString(36).slice(2,8);
+    d.innerHTML = '<div class="av">G</div><div class="bbl" id="' + uid + '"></div>';
     document.getElementById('messages').appendChild(d);
-    return d.querySelector('.bbl');
+    var bbl = d.querySelector('.bbl');
+    // add speak button after stream ends — attached via data attr
+    bbl.dataset.uid = uid;
+    return bbl;
+  }
+
+  function addSpeakBtn(bbl) {
+    var old = bbl.querySelector('.speak-btn');
+    if (old) old.remove();
+    var btn = document.createElement('button');
+    btn.className = 'speak-btn';
+    btn.innerHTML = '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg> Listen';
+    btn.onclick = function() { speakText(bbl, btn); };
+    bbl.appendChild(btn);
   }
 
   function renderMsg(role, content, anim) {
@@ -811,8 +844,14 @@
       d.className = 'msg-user';
       d.innerHTML = '<div class="bbl">' + esc(content) + '</div>';
     } else {
+      var uid = 'sp_' + Math.random().toString(36).slice(2,8);
       d.className = 'msg-ai';
-      d.innerHTML = '<div class="av">G</div><div class="bbl">' + marked.parse(content) + '</div>';
+      d.innerHTML = '<div class="av">G</div><div class="bbl" id="' + uid + '">' + marked.parse(content) + '</div>';
+      // add speak button
+      setTimeout(function(){
+        var bbl = d.querySelector('.bbl');
+        if (bbl) addSpeakBtn(bbl);
+      }, 50);
     }
     msgs.appendChild(d);
   }
@@ -822,7 +861,150 @@
   function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   function insertPrompt(t) { var inp=document.getElementById('user-input'); inp.value=t; inp.focus(); inp.dispatchEvent(new Event('input')); }
 
+  /* ══════════════════════════════
+     VOICE SYSTEM
+  ══════════════════════════════ */
+
+  /* ── Speech Recognition (Mic Input) ── */
+  var recognition = null;
+  var isListening = false;
+
+  function initSpeechRecognition() {
+    var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return null;
+    var r = new SpeechRecognition();
+    r.continuous = false;
+    r.interimResults = true;
+    r.lang = 'bn-BD'; // Bengali — change to 'en-US' for English
+
+    r.onstart = function() {
+      isListening = true;
+      document.getElementById('mic-btn').classList.add('listening');
+      document.getElementById('voice-status').textContent = '🎤 Listening…';
+    };
+
+    r.onresult = function(e) {
+      var interim = '';
+      var final = '';
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          final += e.results[i][0].transcript;
+        } else {
+          interim += e.results[i][0].transcript;
+        }
+      }
+      var inp = document.getElementById('user-input');
+      inp.value = final || interim;
+      inp.style.height = 'auto';
+      inp.style.height = Math.min(inp.scrollHeight, 140) + 'px';
+      document.getElementById('send-btn').disabled = !inp.value.trim() || busy;
+      if (final) document.getElementById('voice-status').textContent = '✅ Got it!';
+    };
+
+    r.onend = function() {
+      isListening = false;
+      document.getElementById('mic-btn').classList.remove('listening');
+      setTimeout(function(){
+        var st = document.getElementById('voice-status');
+        if (st) st.textContent = '';
+      }, 1500);
+      // auto-send if we got text
+      var val = document.getElementById('user-input').value.trim();
+      if (val) { setTimeout(send, 400); }
+    };
+
+    r.onerror = function(e) {
+      isListening = false;
+      document.getElementById('mic-btn').classList.remove('listening');
+      var msg = e.error === 'not-allowed' ? '❌ Mic permission denied' :
+                e.error === 'no-speech'   ? '🔇 No speech detected' :
+                '❌ Error: ' + e.error;
+      document.getElementById('voice-status').textContent = msg;
+      setTimeout(function(){ document.getElementById('voice-status').textContent = ''; }, 2500);
+    };
+
+    return r;
+  }
+
+  function toggleMic() {
+    if (!recognition) {
+      recognition = initSpeechRecognition();
+      if (!recognition) {
+        alert('Sorry! Your browser does not support voice input.
+Try Chrome or Samsung Browser.');
+        return;
+      }
+    }
+    if (isListening) {
+      recognition.stop();
+    } else {
+      document.getElementById('user-input').value = '';
+      recognition.start();
+    }
+  }
+
+  /* ── Text-to-Speech (AI Speak) ── */
+  var currentUtterance = null;
+
+  function speakText(bbl, btn) {
+    // Stop if already speaking
+    if (currentUtterance) {
+      window.speechSynthesis.cancel();
+      currentUtterance = null;
+      document.querySelectorAll('.speak-btn').forEach(function(b){
+        b.classList.remove('speaking');
+        b.innerHTML = '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg> Listen';
+      });
+      if (btn.dataset.wasPlaying === '1') { btn.dataset.wasPlaying = '0'; return; }
+    }
+
+    // Get plain text from bubble (strip HTML)
+    var tmp = document.createElement('div');
+    tmp.innerHTML = bbl.innerHTML;
+    // remove speak button text
+    var spBtn = tmp.querySelector('.speak-btn');
+    if (spBtn) spBtn.remove();
+    var text = tmp.innerText || tmp.textContent || '';
+    text = text.trim();
+    if (!text) return;
+
+    var utter = new SpeechSynthesisUtterance(text);
+    utter.lang = 'bn-BD'; // Bengali — change to 'en-US' for English
+    utter.rate = 0.95;
+    utter.pitch = 1;
+
+    // Pick a good voice if available
+    var voices = window.speechSynthesis.getVoices();
+    var bn = voices.find(function(v){ return v.lang.startsWith('bn'); });
+    var en = voices.find(function(v){ return v.lang.startsWith('en') && v.localService; });
+    if (bn) utter.voice = bn;
+    else if (en) utter.voice = en;
+
+    btn.dataset.wasPlaying = '1';
+    btn.classList.add('speaking');
+    btn.innerHTML = '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg> Stop';
+
+    utter.onend = function() {
+      currentUtterance = null;
+      btn.dataset.wasPlaying = '0';
+      btn.classList.remove('speaking');
+      btn.innerHTML = '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg> Listen';
+    };
+    utter.onerror = function() { utter.onend(); };
+
+    currentUtterance = utter;
+    window.speechSynthesis.speak(utter);
+  }
+
+  /* preload voices */
+  if (window.speechSynthesis) {
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.onvoiceschanged = function(){};
+  }
+
   init();
+  document.getElementById('mic-btn').addEventListener('click', toggleMic);
+
 </script>
 </body>
 </html>
