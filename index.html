@@ -245,6 +245,18 @@ body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--
 #ghm-body{padding:16px 20px;}
 
 @keyframes pop{from{opacity:0;transform:scale(.96) translateY(6px);}to{opacity:1;transform:scale(1) translateY(0);}}
+
+/* IMAGE GENERATION */
+.img-wrap{margin-top:10px;border-radius:12px;overflow:hidden;border:1px solid var(--border);}
+.img-wrap img{width:100%;display:block;}
+.img-acts{display:flex;gap:8px;padding:10px 12px;background:var(--s2);}
+.img-dl{flex:1;padding:9px;background:var(--accent);color:#fff;border:none;border-radius:10px;
+  font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;
+  display:flex;align-items:center;justify-content:center;gap:5px;}
+.img-dl:active{opacity:.8;}
+.img-info{font-size:11px;color:var(--muted);padding:5px 12px 10px;}
+.img-loading{background:var(--s2);border:1px solid var(--border);border-radius:12px;
+  height:180px;display:flex;align-items:center;justify-content:center;margin-top:8px;}
 </style>
 </head>
 <body>
@@ -307,8 +319,8 @@ body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--
     <div class="chips">
       <div class="chip" onclick="chip('বাংলায় একটি ছোট গল্প লিখো')">বাংলায় গল্প</div>
       <div class="chip" onclick="chip('Write a Python function to reverse a string')">Python কোড</div>
-      <div class="chip" onclick="chip('Create a GitHub repository via API')">GitHub Repo</div>
-      <div class="chip" onclick="chip('HTML দিয়ে একটি login form বানাও')">HTML Form</div>
+      <div class="chip" onclick="chip('image: beautiful sunset over mountains, 1024x512, jpeg')">🎨 Sunset ছবি</div>
+      <div class="chip" onclick="chip('image: cute cat on sofa, 512x512, png')">🐱 Cat ছবি</div>
     </div>
   </div>
 
@@ -332,7 +344,7 @@ body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--
       </button>
     </div>
     <div id="vstatus"></div>
-    <div id="hint">GGBot Boy · 🎤 Tap mic to speak</div>
+    <div id="hint">GGBot Boy · 🎤 Mic · 🎨 image: prompt, WxH, format</div>
   </div>
 </div>
 </div><!-- #app -->
@@ -721,11 +733,109 @@ function renderList(){
   });
 }
 
+/* ══ IMAGE GENERATION (Pollinations.ai — free, no key) ══ */
+function isImgReq(txt){
+  var t=txt.toLowerCase().trim();
+  return t.startsWith('image:')||t.startsWith('img:')||t.startsWith('draw:')||
+         t.startsWith('ছবি:')||t.startsWith('picture:')||t.startsWith('generate image:');
+}
+
+function parseImgReq(txt){
+  /* Remove prefix */
+  var t=txt.trim();
+  var prefixes=['generate image:','image:','img:','draw:','ছবি:','picture:'];
+  for(var i=0;i<prefixes.length;i++){
+    if(t.toLowerCase().startsWith(prefixes[i])){t=t.slice(prefixes[i].length).trim();break;}
+  }
+  /* Defaults */
+  var w=1024,h=1024,fmt='jpeg';
+  /* Parse size: e.g. 512x512 or 1024x768 */
+  var sm=t.match(/(\d+)\s*[xX×]\s*(\d+)/);
+  if(sm){
+    w=Math.min(Math.max(parseInt(sm[1]),64),2048);
+    h=Math.min(Math.max(parseInt(sm[2]),64),2048);
+  }
+  /* Parse format */
+  if(/\bpng\b/i.test(t))fmt='png';
+  else if(/\bwebp\b/i.test(t))fmt='webp';
+  else if(/\bgif\b/i.test(t))fmt='jpeg'; /* gif not supported, fallback */
+  else if(/\bjpe?g\b/i.test(t))fmt='jpeg';
+  /* Clean prompt — remove size and format tokens */
+  var prompt=t
+    .replace(/\d+\s*[xX×]\s*\d+/g,'')
+    .replace(/\b(png|jpeg|jpg|webp|gif)\b/gi,'')
+    .replace(/,\s*,/g,',').replace(/,\s*$/,'').trim();
+  if(!prompt)prompt='beautiful scenery';
+  return{prompt:prompt,w:w,h:h,fmt:fmt};
+}
+
+function genImage(bbl,opts){
+  var seed=Math.floor(Math.random()*999999);
+  var url='https://image.pollinations.ai/prompt/'+encodeURIComponent(opts.prompt)+
+    '?width='+opts.w+'&height='+opts.h+'&seed='+seed+'&nologo=true&enhance=true';
+
+  bbl.innerHTML=
+    '<p style="font-size:13px;color:var(--muted);margin-bottom:8px">🎨 <strong>'+xe(opts.prompt.slice(0,60))+(opts.prompt.length>60?'…':'')+'</strong></p>'+
+    '<div class="img-loading" id="iph">'+
+      '<div style="text-align:center;color:var(--muted)">'+
+        '<div style="font-size:28px;margin-bottom:8px">🎨</div>'+
+        '<div style="font-size:13px">Generating '+opts.w+'×'+opts.h+' '+opts.fmt.toUpperCase()+'…</div>'+
+      '</div>'+
+    '</div>';
+  scrollBot();
+
+  var img=new Image();
+  img.onload=function(){
+    var ph=bbl.querySelector('#iph');
+    if(ph)ph.outerHTML=
+      '<div class="img-wrap">'+
+        '<img src="'+url+'" alt="'+xe(opts.prompt)+'"/>'+
+        '<div class="img-acts">'+
+          '<a href="'+url+'" download="ggbot-'+Date.now()+'.'+opts.fmt+'" target="_blank" class="img-dl">'+
+            '⬇ Download '+opts.fmt.toUpperCase()+
+          '</a>'+
+        '</div>'+
+        '<div class="img-info">'+opts.w+'×'+opts.h+' · '+opts.fmt.toUpperCase()+' · Pollinations.ai</div>'+
+      '</div>';
+    if(bbl.querySelector('.spkb')==null)addSpkBtn(bbl);
+    scrollBot();
+  };
+  img.onerror=function(){
+    var ph=bbl.querySelector('#iph');
+    if(ph)ph.innerHTML='<div style="color:#f87171;font-size:13px;padding:20px;text-align:center">❌ Generation failed. Please try again.</div>';
+  };
+  img.src=url;
+}
+
 /* ══ SEND ══ */
 async function doSend(){
   var tx=document.getElementById('txtin');
   var txt=tx.value.trim();
   if(!txt||busy)return;
+
+  /* ── IMAGE REQUEST CHECK ── */
+  if(isImgReq(txt)){
+    if(!chatId){
+      chatId=Date.now().toString();
+      chats[chatId]={title:txt.slice(0,50)+(txt.length>50?'…':''),messages:[]};
+      document.getElementById('welcome').style.display='none';
+      document.getElementById('cbox').style.display='flex';
+      renderList();
+    }
+    chats[chatId].messages.push({role:'user',content:txt});
+    saveC();
+    tx.value='';tx.style.height='auto';
+    document.getElementById('send-btn').disabled=true;
+    addMsg('user',txt);
+    scrollBot();
+    var opts=parseImgReq(txt);
+    var imgBubble=mkBubble();
+    genImage(imgBubble,opts);
+    chats[chatId].messages.push({role:'assistant',content:'[Image generated: '+opts.prompt+']'});
+    saveC();
+    document.getElementById('send-btn').disabled=!document.getElementById('txtin').value.trim();
+    return;
+  }
   if(!chatId){
     chatId=Date.now().toString();
     chats[chatId]={title:txt.slice(0,50)+(txt.length>50?'…':''),messages:[]};
@@ -906,3 +1016,4 @@ init();
 </script>
 </body>
 </html>
+
